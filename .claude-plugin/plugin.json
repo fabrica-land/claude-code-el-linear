@@ -1,0 +1,12 @@
+{
+  "name": "el-linear",
+  "version": "1.0.0",
+  "description": "Linear webhook sidecar plugin for el — receives webhooks, verifies HMAC-SHA256 signatures, deduplicates events, and surfaces issue/comment activity to Claude Code sessions.",
+  "author": {
+    "name": "Tim Garthwaite",
+    "url": "https://github.com/mividtim"
+  },
+  "repository": "https://github.com/mividtim/claude-code-el-linear",
+  "license": "MIT",
+  "keywords": ["el", "linear", "webhook", "events", "issue-tracking"]
+}
