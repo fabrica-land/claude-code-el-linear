@@ -21,6 +21,8 @@ import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -259,6 +261,69 @@ def _handle_webhook(handler):
 
 
 # ---------------------------------------------------------------------------
+# Ngrok tunnel auto-repair
+# ---------------------------------------------------------------------------
+
+NGROK_API = 'http://localhost:4040/api'
+NGROK_TUNNEL_NAME = os.environ.get('LINEAR_NGROK_TUNNEL', 'linear')
+NGROK_SUBDOMAIN = os.environ.get('LINEAR_NGROK_SUBDOMAIN', '')
+
+
+def _check_ngrok_tunnel():
+    """Check if the ngrok 'linear' tunnel points to the current sidecar port.
+    If stale, delete and recreate it. Runs in a background thread after startup."""
+    time.sleep(3)
+    sidecar_json = os.path.join(os.getcwd(), '.claude', 'sidecar.json')
+    try:
+        with open(sidecar_json) as f:
+            port = json.load(f)['port']
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        sys.stderr.write("[el-linear] Cannot read sidecar.json for ngrok check\n")
+        return
+    try:
+        resp = urllib.request.urlopen(f'{NGROK_API}/tunnels', timeout=3)
+        tunnels = json.loads(resp.read()).get('tunnels', [])
+    except (urllib.error.URLError, OSError):
+        sys.stderr.write("[el-linear] ngrok not running — skipping tunnel check\n")
+        return
+    expected_addr = f'http://localhost:{port}'
+    for tunnel in tunnels:
+        if tunnel.get('name') == NGROK_TUNNEL_NAME:
+            current_addr = tunnel.get('config', {}).get('addr', '')
+            if current_addr == expected_addr:
+                sys.stderr.write(f"[el-linear] ngrok tunnel '{NGROK_TUNNEL_NAME}' OK -> {expected_addr}\n")
+                return
+            sys.stderr.write(f"[el-linear] ngrok tunnel stale: {current_addr} -> updating to {expected_addr}\n")
+            try:
+                req = urllib.request.Request(f'{NGROK_API}/tunnels/{NGROK_TUNNEL_NAME}', method='DELETE')
+                urllib.request.urlopen(req, timeout=5)
+            except (urllib.error.URLError, OSError) as e:
+                sys.stderr.write(f"[el-linear] Failed to delete stale tunnel: {e}\n")
+                return
+            break
+    if not NGROK_SUBDOMAIN:
+        sys.stderr.write(f"[el-linear] No LINEAR_NGROK_SUBDOMAIN set — cannot create tunnel\n")
+        return
+    tunnel_config = json.dumps({
+        'name': NGROK_TUNNEL_NAME,
+        'proto': 'http',
+        'addr': expected_addr,
+        'hostname': f'{NGROK_SUBDOMAIN}.ngrok.io',
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            f'{NGROK_API}/tunnels',
+            data=tunnel_config,
+            headers={'Content-Type': 'application/json'},
+        )
+        resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        public_url = resp.get('public_url', '?')
+        sys.stderr.write(f"[el-linear] ngrok tunnel created: {public_url} -> {expected_addr}\n")
+    except (urllib.error.URLError, OSError) as e:
+        sys.stderr.write(f"[el-linear] Failed to create ngrok tunnel: {e}\n")
+
+
+# ---------------------------------------------------------------------------
 # Plugin registration
 # ---------------------------------------------------------------------------
 
@@ -268,6 +333,9 @@ def register(api):
     global _api
     _api = api
     api['register_route']('POST', '/linear', _handle_webhook)
+    api['register_init']('linear-ngrok', lambda: threading.Thread(
+        target=_check_ngrok_tunnel, daemon=True, name='linear-ngrok-check',
+    ).start())
     sig_status = f'verified ({len(WEBHOOK_SECRETS)} secret(s))' if WEBHOOK_SECRETS else 'unverified (no secret)'
     sys.stderr.write(
         f"[el-linear] Registered (signature={sig_status}, "
