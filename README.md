@@ -96,3 +96,7 @@ curl -X POST http://localhost:55952/linear \
 ## License
 
 MIT
+
+## License
+
+MIT © Fabrica, Inc. — see [LICENSE](LICENSE). Created and maintained by Tim Garthwaite.
